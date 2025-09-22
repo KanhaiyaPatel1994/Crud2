@@ -1,0 +1,118 @@
+﻿@page "/employees"
+@using Crud2.Dto
+@using System.Net.Http.Json
+@inject HttpClient Http
+@* @inject Logger<Employees> logger; *@
+
+<h3>Employee Management</h3>
+
+<div class="mb-3">
+    <input type="text" placeholder="Name" @bind="newEmployee.Name" />
+    <input type="text" placeholder="Email" @bind="newEmployee.Email" />
+    <button @onclick="AddEmployee">Add</button>
+</div>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Id</th>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var emp in employees)
+        {
+            <tr>
+                <td>@emp.Id</td>
+                <td>@emp.Name</td>
+                <td>@emp.Email</td>
+                <td>
+                    <button @onclick="() => EditEmployee(emp)">Edit</button>
+                    <button @onclick="() => DeleteEmployee(emp.Id)">Delete</button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@if (editEmployee != null)
+{
+
+    <h4>Edit Employee</h4>
+    <input type="text" @bind="editEmployee.Name" />
+    <input type="text" @bind="editEmployee.Email" />
+    <button @onclick="UpdateEmployee">Update</button>
+    <button @onclick="() => editEmployee = null">Cancel</button>
+}
+
+@code {
+    private List<Employee> employees = new();
+    private Employee newEmployee = new();
+    private Employee? editEmployee;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var result = await Http.GetFromJsonAsync<List<Employee>>("api/App/GetAllEmployees");
+            employees = result ?? new List<Employee>();
+        }
+        catch(Exception ex)
+        {
+          //  logger.LogError(ex, "Error fetching employees");
+        }
+        
+    }
+
+  
+    private async Task AddEmployee()
+    {
+        var response = await Http.PostAsJsonAsync("api/App/AddEmployee", newEmployee);
+        if (response.IsSuccessStatusCode)
+        {
+            // Reload employees from API to reflect DB state
+            employees = await Http.GetFromJsonAsync<List<Employee>>("api/App/GetAllEmployees")
+                        ?? new List<Employee>();
+
+            newEmployee = new Employee();
+            StateHasChanged();
+        }
+    }
+
+    private void EditEmployee(Employee emp)
+    {
+        editEmployee = new Employee
+        {
+            Id = emp.Id,
+            Name = emp.Name,
+            Email = emp.Email
+        };
+    }
+
+    private async Task UpdateEmployee()
+    {
+        if (editEmployee == null) return;
+
+        var response = await Http.PutAsJsonAsync($"api/App/UpdateEmployee", editEmployee);
+        if (response.IsSuccessStatusCode)
+        {
+            var index = employees.FindIndex(e => e.Id == editEmployee.Id);
+            if (index >= 0)
+            {
+                employees[index] = editEmployee;
+            }
+            editEmployee = null;
+        }
+    }
+
+    private async Task DeleteEmployee(int id)
+    {
+        var response = await Http.DeleteAsync($"api/App/DeleteEmployee/{id}");
+        if (response.IsSuccessStatusCode)
+        {
+            employees.RemoveAll(e => e.Id == id);
+        }
+    }
+}

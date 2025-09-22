@@ -1,0 +1,180 @@
+﻿@page "/test"
+
+
+<h1 class="page-title">Test page</h1>
+
+<div class="grid">
+    <div class="card gauge-card">
+        <div class="gauge-header">Temperature (°C)</div>
+        <div class="gauge-body">
+            <div class="gauge-value">@Latest?.Temperature.ToString("0.0") °C</div>
+            <svg class="gauge-svg" viewBox="0 0 100 60" preserveAspectRatio="xMidYMid meet">
+                <defs>
+                    <linearGradient id="g1" x1="0" x2="1">
+                        <stop offset="0%" stop-opacity="1" stop-color="#ff8a65"></stop>
+                        <stop offset="100%" stop-opacity="1" stop-color="#ff7043"></stop>
+                    </linearGradient>
+                </defs>
+                <path d="M10 50 A40 40 0 0 1 90 50" stroke="#e6e6e6" stroke-width="8" fill="none" stroke-linecap="round" />
+                <path d="@GetGaugeArcPath(TemperatureNormalized)" stroke="url(#g1)" stroke-width="8" fill="none" stroke-linecap="round" />
+                <text x="50" y="45" text-anchor="middle" font-size="8" fill="#333">@($"{TemperatureNormalized * 100:0}%")</text>
+            </svg>
+            <div class="gauge-sub">Range: 0 — 100% (mapped)</div>
+        </div>
+    </div>
+
+    <div class="card gauge-card">
+        <div class="gauge-header">Vibration (m/s²)</div>
+        <div class="gauge-body">
+            <div class="gauge-value">@Latest?.Vibration.ToString("0.000") m/s²</div>
+            <svg class="gauge-svg" viewBox="0 0 100 60" preserveAspectRatio="xMidYMid meet">
+                <defs>
+                    <linearGradient id="g2" x1="0" x2="1">
+                        <stop offset="0%" stop-opacity="1" stop-color="#4fc3f7"></stop>
+                        <stop offset="100%" stop-opacity="1" stop-color="#0288d1"></stop>
+                    </linearGradient>
+                </defs>
+                <path d="M10 50 A40 40 0 0 1 90 50" stroke="#e6e6e6" stroke-width="8" fill="none" stroke-linecap="round" />
+                <path d="@GetGaugeArcPath(VibrationNormalized)" stroke="url(#g2)" stroke-width="8" fill="none" stroke-linecap="round" />
+                <text x="50" y="45" text-anchor="middle" font-size="8" fill="#333">@($"{VibrationNormalized * 100:0}%")</text>
+            </svg>
+            <div class="gauge-sub">Typical working range mapped to 0–100%</div>
+        </div>
+    </div>
+</div>
+
+<div class="chart-card card">
+    <canvas id="lineChart" style="width:100%;height:320px;"></canvas>
+</div>
+
+<div class="card data-grid">
+    <div class="grid-header">Recent samples</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Temperature (°C)</th>
+                <th>Vibration (m/s²)</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in RecentSamples)
+            {
+                <tr>
+                    <td>@item.Timestamp.ToString("HH:mm:ss")</td>
+                    <td>@item.Temperature.ToString("0.00")</td>
+                    <td>@item.Vibration.ToString("0.000")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private System.Threading.Timer? _timer;
+    private readonly object _lock = new();
+    private List<SensorSample> RecentSamples { get; set; } = new();
+    private SensorSample? Latest => RecentSamples.LastOrDefault();
+
+    // Mapping config (change to match your sensor real ranges)
+    private const double TempMin = 20.0;
+    private const double TempMax = 60.0;
+
+    // Vibration expected min/max (example). Adjust accordingly.
+    private const double VibMin = 0.0;
+    private const double VibMax = 2.0;
+
+    // Normalized values (0..1)
+    private double TemperatureNormalized => Normalize(Latest?.Temperature ?? TempMin, TempMin, TempMax);
+    private double VibrationNormalized => Normalize(Latest?.Vibration ?? 0.0, VibMin, VibMax);
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Seed a few samples
+        lock (_lock)
+        {
+            for (int i = 6; i >= 1; i--)
+            {
+                RecentSamples.Add(RandomSample(DateTime.Now.AddSeconds(-i * 10)));
+            }
+        }
+
+        // Timer : every 10 seconds insert a new sample, then update chart via JS interop
+        _timer = new System.Threading.Timer(async _ =>
+        {
+            var sample = RandomSample(DateTime.Now);
+            lock (_lock)
+            {
+                RecentSamples.Add(sample);
+                if (RecentSamples.Count > 30) RecentSamples.RemoveAt(0);
+            }
+
+            // notify UI thread
+            await InvokeAsync(async () =>
+            {
+                StateHasChanged();
+                // call js to add new point to chart
+                //await JS.InvokeVoidAsync("dashboard.addPoint", sample.Timestamp.ToString("HH:mm:ss"), sample.Temperature, sample.Vibration);
+            });
+        }, null, 1000, 10_000); // fire after 1s, repeat every 10s
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Initialize JS chart with initial data
+            var labels = RecentSamples.Select(s => s.Timestamp.ToString("HH:mm:ss")).ToArray();
+            var temps = RecentSamples.Select(s => s.Temperature).ToArray();
+            var vibs = RecentSamples.Select(s => s.Vibration).ToArray();
+
+           // await JS.InvokeVoidAsync("dashboard.init", labels, temps, vibs);
+        }
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
+
+    // Helper: create random sample simulating the machine data
+    private Random _rnd = new Random();
+    private SensorSample RandomSample(DateTime dt)
+    {
+        // Test behavior: random temp 35-40 (user wanted test range previously) and vibration 0.4-0.7
+        var temp = 35 + _rnd.NextDouble() * 5.0; // 35–40
+        // Add occasional spikes
+        var vibBase = 0.45 + _rnd.NextDouble() * 0.25; // 0.45–0.70
+        if (_rnd.NextDouble() < 0.08) vibBase += (_rnd.NextDouble() * 1.5); // occasional spike up to ~2.2
+        return new SensorSample { Timestamp = dt, Temperature = temp, Vibration = Math.Round(vibBase, 4) };
+    }
+
+    private static double Normalize(double value, double min, double max)
+    {
+        if (max <= min) return 0;
+        var v = (value - min) / (max - min);
+        return Math.Max(0.0, Math.Min(1.0, v));
+    }
+
+    // Build SVG arc path for gauge (semi-circle). parameter t is 0..1
+    private string GetGaugeArcPath(double t)
+    {
+        // Map t (0..1) to angle from 180° to 0° in radians
+        var angle = Math.PI * (1 - t); // pi -> 0
+        // start point at left-most (10,50) ; arc center approx (50,50) radius 40
+        double cx = 50, cy = 50, r = 40;
+        double x = cx + r * Math.Cos(angle);
+        double y = cy + r * Math.Sin(angle);
+        // large arc flag: if angle spans more than 180° (won't happen since 0..pi), keep 0
+        int largeArc = (t > 0.5) ? 1 : 0;
+        // SVG arc from left (10,50) to x,y
+        return $"M10 50 A{r} {r} 0 {largeArc} 1 {x:0.###} {y:0.###}";
+    }
+
+    private class SensorSample
+    {
+        public DateTime Timestamp { get; set; }
+        public double Temperature { get; set; }
+        public double Vibration { get; set; }
+    }
+}
